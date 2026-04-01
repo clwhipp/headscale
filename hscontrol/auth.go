@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -28,7 +29,16 @@ func (h *Headscale) handleRegister(
 	ctx context.Context,
 	req tailcfg.RegisterRequest,
 	machineKey key.MachinePublic,
+	clientIP netip.Addr,
 ) (*tailcfg.RegisterResponse, error) {
+	if h.registrationLimiter != nil && clientIP.IsValid() {
+		if !h.registrationLimiter.allow(clientIP) {
+			log.Info().Str("ip", clientIP.String()).Msg("registration rate limit exceeded")
+
+			return nil, NewHTTPError(http.StatusTooManyRequests, "rate limit exceeded", nil)
+		}
+	}
+
 	// Check for logout/expiry FIRST, before checking auth key.
 	// Tailscale clients may send logout requests with BOTH a past expiry AND an auth key.
 	// A past expiry takes precedence - it's a logout regardless of other fields.
@@ -122,6 +132,19 @@ func (h *Headscale) handleRegister(
 		}
 
 		return resp, nil
+	}
+
+	// IP-based registration restriction for NEW nodes without PreAuthKey
+	// Only apply to new registrations (interactive path), not existing node re-registration
+	if clientIP.IsValid() && !h.isInteractiveRegistrationAllowed(clientIP) && !isAuthKey(req) {
+		log.Warn().
+			Str("client_ip", clientIP.String()).
+			Str("node_key", req.NodeKey.ShortString()).
+			Msg("Interactive registration denied: untrusted IP without PreAuthKey")
+
+		return &tailcfg.RegisterResponse{
+			Error: "Registration from untrusted networks requires a PreAuthKey",
+		}, nil
 	}
 
 	resp, err := h.handleRegisterInteractive(req, machineKey)
@@ -230,6 +253,23 @@ func (h *Headscale) handleLogout(
 // using an pre auth key.
 func isAuthKey(req tailcfg.RegisterRequest) bool {
 	return req.Auth != nil && req.Auth.AuthKey != ""
+}
+
+// isInteractiveRegistrationAllowed checks if the given IP is in the configured
+// InteractiveCIDRsWhitelist. If no ranges are configured, all IPs are considered
+// allowed (backward compatible).
+func (h *Headscale) isInteractiveRegistrationAllowed(ip netip.Addr) bool {
+	if len(h.cfg.Registration.InteractiveCIDRsWhitelist) == 0 {
+		return true
+	}
+
+	for _, prefix := range h.cfg.Registration.InteractiveCIDRsWhitelist {
+		if prefix.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func nodeToRegisterResponse(node types.NodeView) *tailcfg.RegisterResponse {

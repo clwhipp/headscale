@@ -3,6 +3,7 @@ package hscontrol
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"strings"
 	"testing"
@@ -668,12 +669,12 @@ func TestAuthenticationFlows(t *testing.T) {
 				}
 				app.state.SetRegistrationCacheEntry(regID, nodeToRegister)
 
-				// Simulate successful registration - send to buffered channel
-				// The channel is buffered (size 1), so this can complete immediately
-				// and handleRegister will receive the value when it starts waiting
+				// Create the node before starting the goroutine so the channel
+				// send is a cheap non-blocking operation. Doing DB work inside
+				// the goroutine races against the 100ms context timeout under -race.
+				user := app.state.CreateUserForTest("followup-user")
+				node := app.state.CreateNodeForTest(user, "followup-success-node")
 				go func() {
-					user := app.state.CreateUserForTest("followup-user")
-					node := app.state.CreateNodeForTest(user, "followup-success-node")
 					registered <- node
 				}()
 
@@ -1712,7 +1713,7 @@ func TestAuthenticationFlows(t *testing.T) {
 					},
 					Expiry: time.Now().Add(24 * time.Hour),
 				}
-				_, err = app.handleRegister(context.Background(), initialReq, machineKey1.Public())
+				_, err = app.handleRegister(context.Background(), initialReq, machineKey1.Public(), netip.Addr{})
 				if err != nil {
 					return "", err
 				}
@@ -1932,7 +1933,7 @@ func TestAuthenticationFlows(t *testing.T) {
 					},
 					Expiry: time.Now().Add(24 * time.Hour),
 				}
-				_, err = app.handleRegister(context.Background(), initialReq, machineKey1.Public())
+				_, err = app.handleRegister(context.Background(), initialReq, machineKey1.Public(), netip.Addr{})
 				if err != nil {
 					return "", err
 				}
@@ -2031,7 +2032,7 @@ func TestAuthenticationFlows(t *testing.T) {
 					}
 
 					// These should all fail gracefully
-					_, err := app.handleRegister(context.Background(), followupReq, machineKey1.Public())
+					_, err := app.handleRegister(context.Background(), followupReq, machineKey1.Public(), netip.Addr{})
 					assert.Error(t, err, "malformed followup URL should be rejected: %s", malformedURL)
 				}
 			},
@@ -2076,7 +2077,7 @@ func TestAuthenticationFlows(t *testing.T) {
 							Expiry: time.Now().Add(24 * time.Hour),
 						}
 
-						_, err := app.handleRegister(context.Background(), followupReq, machineKey1.Public())
+						_, err := app.handleRegister(context.Background(), followupReq, machineKey1.Public(), netip.Addr{})
 						results <- err
 					}(i)
 				}
@@ -2139,7 +2140,7 @@ func TestAuthenticationFlows(t *testing.T) {
 					Expiry: time.Now().Add(24 * time.Hour),
 				}
 
-				_, err = app.handleRegister(context.Background(), initialReq, machineKey1.Public())
+				_, err = app.handleRegister(context.Background(), initialReq, machineKey1.Public(), netip.Addr{})
 				if err != nil {
 					return "", err
 				}
@@ -2313,7 +2314,7 @@ func TestAuthenticationFlows(t *testing.T) {
 					Expiry: time.Now().Add(24 * time.Hour),
 				}
 
-				resp2, err := app.handleRegister(context.Background(), secondReq, machineKey1.Public())
+				resp2, err := app.handleRegister(context.Background(), secondReq, machineKey1.Public(), netip.Addr{})
 				require.NoError(t, err)
 				authURL2 := resp2.AuthURL
 				assert.Contains(t, authURL2, "/register/")
@@ -2369,7 +2370,7 @@ func TestAuthenticationFlows(t *testing.T) {
 					Expiry: time.Now().Add(24 * time.Hour),
 				}
 
-				resp2, err := app.handleRegister(context.Background(), secondReq, machineKey1.Public())
+				resp2, err := app.handleRegister(context.Background(), secondReq, machineKey1.Public(), netip.Addr{})
 				require.NoError(t, err)
 				authURL2 := resp2.AuthURL
 				regID2, err := extractRegistrationIDFromAuthURL(authURL2)
@@ -2398,7 +2399,7 @@ func TestAuthenticationFlows(t *testing.T) {
 				}
 
 				go func() {
-					resp, err := app.handleRegister(context.Background(), followupReq, machineKey1.Public())
+					resp, err := app.handleRegister(context.Background(), followupReq, machineKey1.Public(), netip.Addr{})
 					if err != nil {
 						errorChan <- err
 						return
@@ -2479,7 +2480,7 @@ func TestAuthenticationFlows(t *testing.T) {
 			}
 
 			// Execute the test
-			resp, err := app.handleRegister(ctx, req, machineKey)
+			resp, err := app.handleRegister(ctx, req, machineKey, netip.Addr{})
 
 			// Validate error expectations
 			if tt.wantError {
@@ -2556,7 +2557,7 @@ func runInteractiveWorkflowTest(t *testing.T, tt struct {
 		switch step.stepType {
 		case stepTypeInitialRequest:
 			// Step 1: Initial request should get AuthURL back
-			initialResp, err = app.handleRegister(ctx, req, machineKey)
+			initialResp, err = app.handleRegister(ctx, req, machineKey, netip.Addr{})
 			require.NoError(t, err, "initial request should not fail")
 			require.NotNil(t, initialResp, "initial response should not be nil")
 
@@ -2592,7 +2593,7 @@ func runInteractiveWorkflowTest(t *testing.T, tt struct {
 				errorChan := make(chan error, 1)
 
 				go func() {
-					resp, err := app.handleRegister(context.Background(), followupReq, machineKey)
+					resp, err := app.handleRegister(context.Background(), followupReq, machineKey, netip.Addr{})
 					if err != nil {
 						errorChan <- err
 						return
@@ -2808,7 +2809,7 @@ func TestPreAuthKeyLogoutAndReloginDifferentUser(t *testing.T) {
 			NodeKey: node.nodeKey.Public(),
 		}
 
-		resp, err := app.handleRegister(context.Background(), logoutReq, node.machineKey.Public())
+		resp, err := app.handleRegister(context.Background(), logoutReq, node.machineKey.Public(), netip.Addr{})
 		require.NoError(t, err)
 		t.Logf("Logout response for %s: %+v", node.hostname, resp)
 	}
@@ -2940,7 +2941,7 @@ func TestWebFlowReauthDifferentUser(t *testing.T) {
 		NodeKey: nodeKey1.Public(),
 		Expiry:  pastTime, // Expired = logout
 	}
-	_, err = app.handleRegister(context.Background(), logoutReq, machineKey.Public())
+	_, err = app.handleRegister(context.Background(), logoutReq, machineKey.Public(), netip.Addr{})
 	require.NoError(t, err)
 
 	// Verify node is expired
@@ -2962,7 +2963,7 @@ func TestWebFlowReauthDifferentUser(t *testing.T) {
 	}
 
 	// Initial request should return AuthURL
-	initialResp, err := app.handleRegister(context.Background(), reAuthReq, machineKey.Public())
+	initialResp, err := app.handleRegister(context.Background(), reAuthReq, machineKey.Public(), netip.Addr{})
 	require.NoError(t, err)
 	require.NotEmpty(t, initialResp.AuthURL, "Should receive AuthURL for interactive flow")
 	t.Logf("✓ Interactive flow started, AuthURL: %s", initialResp.AuthURL)
@@ -3147,7 +3148,7 @@ func TestGitHubIssue2830_NodeRestartWithUsedPreAuthKey(t *testing.T) {
 	}
 
 	t.Log("Step 1: Initial registration with pre-auth key")
-	initialResp, err := app.handleRegister(context.Background(), initialReq, machineKey.Public())
+	initialResp, err := app.handleRegister(context.Background(), initialReq, machineKey.Public(), netip.Addr{})
 	require.NoError(t, err, "initial registration should succeed")
 	require.NotNil(t, initialResp)
 	assert.True(t, initialResp.MachineAuthorized, "node should be authorized")
@@ -3185,7 +3186,7 @@ func TestGitHubIssue2830_NodeRestartWithUsedPreAuthKey(t *testing.T) {
 
 	// BUG: This fails with "authkey already used" or "authkey expired"
 	// EXPECTED: Should succeed because it's the same node re-registering
-	restartResp, err := app.handleRegister(context.Background(), restartReq, machineKey.Public())
+	restartResp, err := app.handleRegister(context.Background(), restartReq, machineKey.Public(), netip.Addr{})
 
 	// This is the assertion that currently FAILS in v0.27.0
 	assert.NoError(t, err, "BUG: existing node re-registration with its own used pre-auth key should succeed")
@@ -3237,7 +3238,7 @@ func TestNodeReregistrationWithReusablePreAuthKey(t *testing.T) {
 		Expiry: time.Now().Add(24 * time.Hour),
 	}
 
-	initialResp, err := app.handleRegister(context.Background(), initialReq, machineKey.Public())
+	initialResp, err := app.handleRegister(context.Background(), initialReq, machineKey.Public(), netip.Addr{})
 	require.NoError(t, err)
 	require.NotNil(t, initialResp)
 	assert.True(t, initialResp.MachineAuthorized)
@@ -3254,7 +3255,7 @@ func TestNodeReregistrationWithReusablePreAuthKey(t *testing.T) {
 		Expiry: time.Now().Add(24 * time.Hour),
 	}
 
-	restartResp, err := app.handleRegister(context.Background(), restartReq, machineKey.Public())
+	restartResp, err := app.handleRegister(context.Background(), restartReq, machineKey.Public(), netip.Addr{})
 	require.NoError(t, err, "reusable key should allow re-registration")
 	require.NotNil(t, restartResp)
 	assert.True(t, restartResp.MachineAuthorized)
@@ -3288,7 +3289,7 @@ func TestNodeReregistrationWithExpiredPreAuthKey(t *testing.T) {
 		Expiry: time.Now().Add(24 * time.Hour),
 	}
 
-	_, err = app.handleRegister(context.Background(), req, machineKey.Public())
+	_, err = app.handleRegister(context.Background(), req, machineKey.Public(), netip.Addr{})
 	assert.Error(t, err, "expired pre-auth key should be rejected")
 	assert.Contains(t, err.Error(), "authkey expired", "error should mention key expiration")
 }
@@ -3324,7 +3325,7 @@ func TestIssue2830_ExistingNodeReregistersWithExpiredKey(t *testing.T) {
 		Expiry: time.Now().Add(24 * time.Hour),
 	}
 
-	resp, err := app.handleRegister(context.Background(), req, machineKey.Public())
+	resp, err := app.handleRegister(context.Background(), req, machineKey.Public(), netip.Addr{})
 	require.NoError(t, err, "initial registration should succeed")
 	require.NotNil(t, resp)
 	require.True(t, resp.MachineAuthorized, "node should be authorized after initial registration")
@@ -3369,7 +3370,7 @@ func TestIssue2830_ExistingNodeReregistersWithExpiredKey(t *testing.T) {
 		Expiry: time.Now().Add(24 * time.Hour),
 	}
 
-	resp2, err := app.handleRegister(context.Background(), req2, machineKey.Public())
+	resp2, err := app.handleRegister(context.Background(), req2, machineKey.Public(), netip.Addr{})
 	require.NoError(t, err, "re-registration should succeed even with expired key for existing node")
 	assert.NotNil(t, resp2)
 	assert.True(t, resp2.MachineAuthorized, "node should remain authorized after re-registration")
@@ -3765,7 +3766,7 @@ func TestDeletedPreAuthKeyNotRecreatedOnNodeUpdate(t *testing.T) {
 		},
 	}
 
-	resp, err := app.handleRegister(context.Background(), registerReq, machineKey.Public())
+	resp, err := app.handleRegister(context.Background(), registerReq, machineKey.Public(), netip.Addr{})
 	require.NoError(t, err, "registration should succeed")
 	require.True(t, resp.MachineAuthorized, "node should be authorized")
 

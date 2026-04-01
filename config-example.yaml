@@ -39,6 +39,37 @@ grpc_listen_addr: 127.0.0.1:50443
 # are doing.
 grpc_allow_insecure: false
 
+# Node registration settings
+#
+# Controls which IP ranges can register without a PreAuthKey via
+# interactive registration (browser-based flow).
+# This is useful for trusted networks (e.g., corporate VPN, admin network).
+# Clients from IPs outside these ranges must provide a PreAuthKey.
+#
+# Example:
+#   interactive_cidrs_whitelist:
+#     - 10.0.0.0/8      # RFC1918 private
+#     - 192.168.0.0/16 # RFC1918 private
+#     - 172.16.0.0/12  # RFC1918 private
+#
+# Leave empty to allow registration from any IP without PreAuthKey.
+registration:
+  interactive_cidrs_whitelist: []
+  # Rate limiting for registration attempts per IP address.
+  # This helps protect against brute-force registration attacks.
+  # Requires a reverse proxy (e.g., Caddy) to forward client IP
+  # via the X-Real-IP header.
+  #
+  # Example:
+  #   rate_limit:
+  #     requests_per_second: 1
+  #     burst: 5
+  #
+  # Set requests_per_second to 0 to disable (default).
+  rate_limit:
+    requests_per_second: 0
+    burst: 5
+
 # The Noise section includes specific configuration for the
 # TS2021 Noise protocol
 noise:
@@ -46,6 +77,14 @@ noise:
   # Tailscale clients when using the new Noise-based protocol. A missing key
   # will be automatically generated.
   private_key_path: /var/lib/headscale/noise_private.key
+
+  # Rate limiting for noise handshake attempts per IP address.
+  # This helps protect against attackers exhausting the server's private key
+  # by forcing repeated noise handshake attempts.
+  # Set to 0 to disable (default).
+  rate_limit:
+    requests_per_second: 1
+    burst: 3
 
 # List of IP prefixes to allocate tailaddresses from.
 # Each prefix consists of either an IPv4 or IPv6 address,

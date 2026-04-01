@@ -467,3 +467,96 @@ func TestSafeServerURL(t *testing.T) {
 		})
 	}
 }
+
+func TestRegistrationInteractiveCIDRsWhitelist(t *testing.T) {
+	t.Run("valid_cidrs", func(t *testing.T) {
+		viper.Reset()
+		err := LoadConfig("testdata/minimal.yaml", true)
+		require.NoError(t, err)
+
+		viper.Set("dns.magic_dns", false)
+		viper.Set("dns.override_local_dns", false)
+		viper.Set("prefixes.v4", "100.64.0.0/10")
+		viper.Set("prefixes.v6", "fd7a:115c:a1e0::/48")
+		viper.Set("prefixes.allocation", "sequential")
+		viper.Set("database.type", "sqlite3")
+		viper.Set("database.sqlite.path", ":memory:")
+		viper.Set("registration.interactive_cidrs_whitelist", []string{
+			"10.0.0.0/8",
+			"192.168.0.0/16",
+		})
+
+		cfg, err := LoadServerConfig()
+		require.NoError(t, err)
+
+		assert.Len(t, cfg.Registration.InteractiveCIDRsWhitelist, 2)
+		assert.Equal(t, "10.0.0.0/8", cfg.Registration.InteractiveCIDRsWhitelist[0].String())
+		assert.Equal(t, "192.168.0.0/16", cfg.Registration.InteractiveCIDRsWhitelist[1].String())
+	})
+
+	t.Run("empty_config", func(t *testing.T) {
+		viper.Reset()
+		err := LoadConfig("testdata/minimal.yaml", true)
+		require.NoError(t, err)
+
+		viper.Set("dns.magic_dns", false)
+		viper.Set("dns.override_local_dns", false)
+		viper.Set("prefixes.v4", "100.64.0.0/10")
+		viper.Set("prefixes.v6", "fd7a:115c:a1e0::/48")
+		viper.Set("prefixes.allocation", "sequential")
+		viper.Set("database.type", "sqlite3")
+		viper.Set("database.sqlite.path", ":memory:")
+		viper.Set("registration.interactive_cidrs_whitelist", []string{})
+
+		cfg, err := LoadServerConfig()
+		require.NoError(t, err)
+
+		assert.Len(t, cfg.Registration.InteractiveCIDRsWhitelist, 0)
+	})
+
+	t.Run("not_configured", func(t *testing.T) {
+		viper.Reset()
+		err := LoadConfig("testdata/minimal.yaml", true)
+		require.NoError(t, err)
+
+		viper.Set("dns.magic_dns", false)
+		viper.Set("dns.override_local_dns", false)
+		viper.Set("prefixes.v4", "100.64.0.0/10")
+		viper.Set("prefixes.v6", "fd7a:115c:a1e0::/48")
+		viper.Set("prefixes.allocation", "sequential")
+		viper.Set("database.type", "sqlite3")
+		viper.Set("database.sqlite.path", ":memory:")
+
+		// Don't set the key at all
+		cfg, err := LoadServerConfig()
+		require.NoError(t, err)
+
+		assert.Len(t, cfg.Registration.InteractiveCIDRsWhitelist, 0)
+	})
+
+	t.Run("invalid_cidr_logs_warning", func(t *testing.T) {
+		viper.Reset()
+		err := LoadConfig("testdata/minimal.yaml", true)
+		require.NoError(t, err)
+
+		viper.Set("dns.magic_dns", false)
+		viper.Set("dns.override_local_dns", false)
+		viper.Set("prefixes.v4", "100.64.0.0/10")
+		viper.Set("prefixes.v6", "fd7a:115c:a1e0::/48")
+		viper.Set("prefixes.allocation", "sequential")
+		viper.Set("database.type", "sqlite3")
+		viper.Set("database.sqlite.path", ":memory:")
+		viper.Set("registration.interactive_cidrs_whitelist", []string{
+			"10.0.0.0/8",
+			"invalid-cidr",
+			"192.168.0.0/16",
+		})
+
+		cfg, err := LoadServerConfig()
+		require.NoError(t, err)
+
+		assert.Len(t, cfg.Registration.InteractiveCIDRsWhitelist, 2)
+		assert.Equal(t, "10.0.0.0/8", cfg.Registration.InteractiveCIDRsWhitelist[0].String())
+		assert.Equal(t, "192.168.0.0/16", cfg.Registration.InteractiveCIDRsWhitelist[1].String())
+	})
+}

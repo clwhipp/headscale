@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 
 	"github.com/gorilla/mux"
 	"github.com/juanfont/headscale/hscontrol/capver"
@@ -64,6 +66,16 @@ func (h *Headscale) NoiseUpgradeHandler(
 		http.Error(writer, "Internal error", http.StatusInternalServerError)
 
 		return
+	}
+
+	clientIP := extractClientIP(req)
+	if h.noiseHandshakeLimiter != nil && clientIP.IsValid() {
+		if !h.noiseHandshakeLimiter.allow(clientIP) {
+			log.Info().Str("ip", clientIP.String()).Msg("noise handshake rate limit exceeded")
+			http.Error(writer, "rate limit exceeded", http.StatusTooManyRequests)
+
+			return
+		}
 	}
 
 	noiseServer := noiseServer{
@@ -230,6 +242,27 @@ func regErr(err error) *tailcfg.RegisterResponse {
 	return &tailcfg.RegisterResponse{Error: err.Error()}
 }
 
+// extractClientIP extracts the client IP from X-Real-IP header (set by reverse proxy)
+// or falls back to parsing from req.RemoteAddr.
+func extractClientIP(req *http.Request) netip.Addr {
+
+	// First check X-Real-IP header, which is commonly set by reverse proxies to indicate the original client IP.
+	if realIP := req.Header.Get("X-Real-IP"); realIP != "" {
+		if ip, err := netip.ParseAddr(realIP); err == nil {
+			return ip
+		}
+	}
+
+	// fallback to parsing the IP from req.RemoteAddr, which is in the form "IP:port"
+	if host, _, err := net.SplitHostPort(req.RemoteAddr); err == nil {
+		if ip, err := netip.ParseAddr(host); err == nil {
+			return ip
+		}
+	}
+
+	return netip.Addr{}
+}
+
 // NoiseRegistrationHandler handles the actual registration process of a node.
 func (ns *noiseServer) NoiseRegistrationHandler(
 	writer http.ResponseWriter,
@@ -254,7 +287,8 @@ func (ns *noiseServer) NoiseRegistrationHandler(
 
 		ns.nodeKey = regReq.NodeKey
 
-		resp, err = ns.headscale.handleRegister(req.Context(), regReq, ns.conn.Peer())
+		clientIP := extractClientIP(req)
+		resp, err = ns.headscale.handleRegister(req.Context(), regReq, ns.conn.Peer(), clientIP)
 		if err != nil {
 			var httpErr HTTPError
 			if errors.As(err, &httpErr) {

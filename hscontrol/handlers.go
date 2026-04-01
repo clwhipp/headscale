@@ -228,12 +228,14 @@ func (h *Headscale) VersionHandler(
 }
 
 type AuthProviderWeb struct {
-	serverURL string
+	serverURL           string
+	registrationLimiter *ipRateLimiter
 }
 
-func NewAuthProviderWeb(serverURL string) *AuthProviderWeb {
+func NewAuthProviderWeb(serverURL string, limiter *ipRateLimiter) *AuthProviderWeb {
 	return &AuthProviderWeb{
-		serverURL: serverURL,
+		serverURL:           serverURL,
+		registrationLimiter: limiter,
 	}
 }
 
@@ -253,6 +255,16 @@ func (a *AuthProviderWeb) RegisterHandler(
 	writer http.ResponseWriter,
 	req *http.Request,
 ) {
+	if a.registrationLimiter != nil {
+		clientIP := extractClientIP(req)
+		if clientIP.IsValid() && !a.registrationLimiter.allow(clientIP) {
+			log.Info().Str("ip", clientIP.String()).Msg("registration rate limit exceeded")
+			httpError(writer, NewHTTPError(http.StatusTooManyRequests, "rate limit exceeded", nil))
+
+			return
+		}
+	}
+
 	vars := mux.Vars(req)
 	registrationIdStr := vars["registration_id"]
 

@@ -97,9 +97,11 @@ type Headscale struct {
 	DERPServer *derpServer.DERPServer
 
 	// Things that generate changes
-	extraRecordMan *dns.ExtraRecordsMan
-	authProvider   AuthProvider
-	mapBatcher     mapper.Batcher
+	extraRecordMan      *dns.ExtraRecordsMan
+	authProvider        AuthProvider
+	mapBatcher          mapper.Batcher
+	registrationLimiter   *ipRateLimiter // nil when rate limiting is disabled
+	noiseHandshakeLimiter *ipRateLimiter // nil when rate limiting is disabled
 
 	clientStreamsOpen sync.WaitGroup
 }
@@ -156,8 +158,22 @@ func NewHeadscale(cfg *types.Config) (*Headscale, error) {
 	})
 	app.ephemeralGC = ephemeralGC
 
+	if cfg.Registration.RateLimit.RequestsPerSecond > 0 {
+		app.registrationLimiter = newIPRateLimiter(
+			cfg.Registration.RateLimit.RequestsPerSecond,
+			cfg.Registration.RateLimit.Burst,
+		)
+	}
+
+	if cfg.NoiseRateLimit.RequestsPerSecond > 0 {
+		app.noiseHandshakeLimiter = newIPRateLimiter(
+			cfg.NoiseRateLimit.RequestsPerSecond,
+			cfg.NoiseRateLimit.Burst,
+		)
+	}
+
 	var authProvider AuthProvider
-	authProvider = NewAuthProviderWeb(cfg.ServerURL)
+	authProvider = NewAuthProviderWeb(cfg.ServerURL, app.registrationLimiter)
 	if cfg.OIDC.Issuer != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -565,6 +581,14 @@ func (h *Headscale) Serve() error {
 	scheduleCtx, scheduleCancel := context.WithCancel(context.Background())
 	defer scheduleCancel()
 	go h.scheduledTasks(scheduleCtx)
+
+	if h.registrationLimiter != nil {
+		h.registrationLimiter.startCleanup(scheduleCtx)
+	}
+
+	if h.noiseHandshakeLimiter != nil {
+		h.noiseHandshakeLimiter.startCleanup(scheduleCtx)
+	}
 
 	if zl.GlobalLevel() == zl.TraceLevel {
 		zerolog.RespLog = true

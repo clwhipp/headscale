@@ -165,6 +165,50 @@ make build
 
 The Makefile will warn you if any required tools are missing and suggest running `nix develop`. Run `make help` to see all available targets.
 
+## Security Findings
+
+Headscale has been security-reviewed with findings documented in [`docs/security-analysis.md`](docs/security-analysis.md). Below is a summary of findings and their current status:
+
+### Mitigated Findings
+
+| Finding | Status | Notes |
+|---------|--------|-------|
+| F1: No node validation on `/machine/register` | **Partially Mitigated** | `interactive_cidrs_whitelist` config option implemented; restricts interactive registration to trusted IP ranges |
+| F4: Hostinfo `RequestTags` manipulation | **Mitigated** | `validateRequestTags()` validates tags against policy before applying |
+| F3: Deleted node persistence | **Mitigated** | NodeStore design removes nodes immediately; `GetNodeByNodeKey()` returns false |
+
+### Remaining Findings (Internet-Facing)
+
+| Finding | Severity | Status | Notes |
+|---------|----------|--------|-------|
+| F2: Expired node persistence | Medium-High | **Not Mitigated** | No server-side expiry check in `getAndValidateNode()`; relies on client cooperation |
+| F2b: No server-side hard block on expired nodes | Medium-High | **Not Mitigated** | Server doesn't forcibly close Noise connection on expiry |
+| F4b: Hostinfo `RoutableIPs` manipulation | Low-Medium | **Not Mitigated** | Client can inject arbitrary routes for auto-approval |
+| F4c: Hostinfo `SSH_HostKeys` manipulation | Low-Medium | **Not Mitigated** | Client can inject arbitrary SSH host keys |
+| F1b: `X-Real-IP` spoofing | Medium | **Not Mitigated** | IP allowlist bypassable without reverse proxy |
+| N1: MapRequest `ReadOnly` not enforced | Medium | **Not Mitigated** | Clients can claim read-only but still update state |
+| N2: Rate limiting disabled by default | High | **Not Mitigated** | Registration rate limiting defaults to 0 (disabled) |
+| N3: No endpoint validation | Low | **Not Mitigated** | Endpoints stored without IP:port format validation |
+| N4: No Hostinfo size limits | Low | **Not Mitigated** | Unbounded Hostinfo could cause DoS |
+
+### Architecture-Mitigated Findings
+
+The following findings are not applicable when admin API endpoints are restricted to internal networks:
+
+- F5: No authorization granularity (API key = full admin)
+- F6: Unix socket auth bypass
+- F7: DebugCreateNode in production
+- F8: SetPolicy affects all nodes
+- F11: ListPreAuthKeys no scoping
+- F12: ListApiKeys no owner concept
+- F13: BackfillNodeIPs destructive
+
+**Recommended mitigations for operators:**
+1. Use `interactive_cidrs_whitelist` to restrict interactive registration to trusted IP ranges
+2. Deploy behind a reverse proxy that properly handles `X-Real-IP`
+3. Restrict admin API endpoints to internal networks only
+4. Enable rate limiting in config: `registration.rate_limit.requests_per_second: 1`
+
 ## Contributors
 
 <a href="https://github.com/juanfont/headscale/graphs/contributors">

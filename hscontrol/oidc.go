@@ -183,6 +183,16 @@ func (a *AuthProviderOIDC) OIDCCallbackHandler(
 	writer http.ResponseWriter,
 	req *http.Request,
 ) {
+	if a.h.registrationLimiter != nil {
+		clientIP := extractClientIP(req)
+		if clientIP.IsValid() && !a.h.registrationLimiter.allow(clientIP) {
+			log.Info().Str("ip", clientIP.String()).Msg("registration rate limit exceeded")
+			httpError(writer, NewHTTPError(http.StatusTooManyRequests, "rate limit exceeded", nil))
+
+			return
+		}
+	}
+
 	code, state, err := extractCodeAndStateParamFromRequest(req)
 	if err != nil {
 		httpError(writer, err)

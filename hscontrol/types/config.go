@@ -101,6 +101,10 @@ type Config struct {
 	Policy PolicyConfig
 
 	Tuning Tuning
+
+	Registration RegistrationConfig
+
+	NoiseRateLimit NoiseRateLimitConfig
 }
 
 type DNSConfig struct {
@@ -236,6 +240,38 @@ func (p *PolicyConfig) IsEmpty() bool {
 type LogConfig struct {
 	Format string
 	Level  zerolog.Level
+}
+
+// RegistrationRateLimitConfig configures per-IP rate limiting for device registration.
+type RegistrationRateLimitConfig struct {
+	// RequestsPerSecond is the sustained rate of registration attempts allowed per
+	// source IP. 0 disables rate limiting (default, backward compatible).
+	RequestsPerSecond float64
+	// Burst is the maximum number of registration attempts allowed in an initial
+	// burst. Must be >= 1 when RequestsPerSecond > 0.
+	Burst int
+}
+
+// NoiseRateLimitConfig configures per-IP rate limiting for noise handshake attempts.
+type NoiseRateLimitConfig struct {
+	// RequestsPerSecond is the sustained rate of noise handshakes allowed per
+	// source IP. 0 disables rate limiting (default).
+	RequestsPerSecond float64
+	// Burst is the maximum number of noise handshakes allowed in an initial burst.
+	// Must be >= 1 when RequestsPerSecond > 0.
+	Burst int
+}
+
+// RegistrationConfig contains settings for node registration.
+type RegistrationConfig struct {
+	// InteractiveCIDRsWhitelist contains CIDR blocks that are allowed to register
+	// without a PreAuthKey via interactive registration (browser-based flow).
+	// IPs outside these ranges must provide a PreAuthKey.
+	// If empty, all IPs are allowed to register without PreAuthKey (backward compatible).
+	InteractiveCIDRsWhitelist []netip.Prefix
+	// RateLimit controls per-IP rate limiting on registration attempts.
+	// Disabled by default (RequestsPerSecond = 0).
+	RateLimit RegistrationRateLimitConfig
 }
 
 // Tuning contains advanced performance tuning parameters for Headscale.
@@ -1088,6 +1124,34 @@ func LoadServerConfig() (*Config, error) {
 			RegisterCacheExpiration: viper.GetDuration("tuning.register_cache_expiration"),
 			NodeStoreBatchSize:      viper.GetInt("tuning.node_store_batch_size"),
 			NodeStoreBatchTimeout:   viper.GetDuration("tuning.node_store_batch_timeout"),
+		},
+
+		Registration: func() RegistrationConfig {
+			registrationInteractiveCIDRsWhitelist := viper.GetStringSlice("registration.interactive_cidrs_whitelist")
+			var interactiveCIDRsWhitelist []netip.Prefix
+			for _, cidr := range registrationInteractiveCIDRsWhitelist {
+				prefix, err := netip.ParsePrefix(cidr)
+				if err != nil {
+					log.Warn().
+						Err(err).
+						Str("cidr", cidr).
+						Msg("Invalid CIDR in registration.interactive_cidrs_whitelist, skipping")
+					continue
+				}
+				interactiveCIDRsWhitelist = append(interactiveCIDRsWhitelist, prefix)
+			}
+			return RegistrationConfig{
+				InteractiveCIDRsWhitelist: interactiveCIDRsWhitelist,
+				RateLimit: RegistrationRateLimitConfig{
+					RequestsPerSecond: viper.GetFloat64("registration.rate_limit.requests_per_second"),
+					Burst:             viper.GetInt("registration.rate_limit.burst"),
+				},
+			}
+		}(),
+
+		NoiseRateLimit: NoiseRateLimitConfig{
+			RequestsPerSecond: viper.GetFloat64("noise.rate_limit.requests_per_second"),
+			Burst:             viper.GetInt("noise.rate_limit.burst"),
 		},
 	}, nil
 }
