@@ -1,0 +1,185 @@
+---
+version: 2
+before:
+  hooks:
+    - go mod tidy -compat=1.25
+    - go mod vendor
+
+release:
+  prerelease: auto
+  draft: true
+  header: |
+    ## Upgrade
+
+    Please follow the steps outlined in the [upgrade guide](https://headscale.net/stable/setup/upgrade/) to update your existing Headscale installation.
+
+    **It's best to update from one stable version to the next** (e.g., 0.24.0 → 0.25.1 → 0.26.1) in case you are multiple releases behind. You should always pick the latest available patch release.
+
+    Be sure to check the changelog above for version-specific upgrade instructions and breaking changes.
+
+    ### Backup Your Database
+
+    **Always backup your database before upgrading.** Here's how to backup a SQLite database:
+
+    ```bash
+    # Stop headscale
+    systemctl stop headscale
+
+    # Backup sqlite database
+    cp /var/lib/headscale/db.sqlite /var/lib/headscale/db.sqlite.backup
+
+    # Backup sqlite WAL/SHM files (if they exist)
+    cp /var/lib/headscale/db.sqlite-wal /var/lib/headscale/db.sqlite-wal.backup
+    cp /var/lib/headscale/db.sqlite-shm /var/lib/headscale/db.sqlite-shm.backup
+
+    # Start headscale (migration will run automatically)
+    systemctl start headscale
+    ```
+
+builds:
+  - id: headscale
+    main: ./cmd/headscale
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    env:
+      - CGO_ENABLED=0
+    targets:
+      - darwin_amd64
+      - darwin_arm64
+      - freebsd_amd64
+      - linux_amd64
+      - linux_arm64
+    flags:
+      - -mod=readonly
+    tags:
+      - ts2019
+
+archives:
+  - id: golang-cross
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}{{ with .Mips }}_{{ . }}{{ end }}{{ if not (eq .Amd64 "v1") }}{{ .Amd64 }}{{ end }}'
+    formats:
+      - binary
+
+source:
+  enabled: true
+  name_template: "{{ .ProjectName }}_{{ .Version }}"
+  format: tar.gz
+  files:
+    - "vendor/"
+
+nfpms:
+  # Configure nFPM for .deb and .rpm releases
+  #
+  # See https://nfpm.goreleaser.com/configuration/
+  # and https://goreleaser.com/customization/nfpm/
+  #
+  # Useful tools for debugging .debs:
+  # List file contents: dpkg -c dist/headscale...deb
+  # Package metadata: dpkg --info dist/headscale....deb
+  #
+  - ids:
+      - headscale
+    package_name: headscale
+    priority: optional
+    vendor: headscale
+    maintainer: Cameron Whipple <cameron@noreply.com>
+    homepage: https://github.com/juanfont/headscale
+    description: |-
+      Open source implementation of the Tailscale control server.
+      Headscale aims to implement a self-hosted, open source alternative to the
+      Tailscale control server. Headscale's goal is to provide self-hosters and
+      hobbyists with an open-source server they can use for their projects and
+      labs. It implements a narrow scope, a single Tailscale network (tailnet),
+      suitable for a personal use, or a small open-source organisation.
+    bindir: /usr/bin
+    section: net
+    formats:
+      - deb
+    contents:
+      - src: ./config-example.yaml
+        dst: /etc/headscale/config.yaml
+        type: config|noreplace
+        file_info:
+          mode: 0644
+      - src: ./packaging/systemd/headscale.service
+        dst: /usr/lib/systemd/system/headscale.service
+      - dst: /var/lib/headscale
+        type: dir
+      - src: LICENSE
+        dst: /usr/share/doc/headscale/copyright
+    scripts:
+      postinstall: ./packaging/deb/postinst
+      postremove: ./packaging/deb/postrm
+      preremove: ./packaging/deb/prerm
+    deb:
+      lintian_overrides:
+        - no-changelog # Our CHANGELOG.md uses a different formatting
+        - no-manual-page
+        - statically-linked-binary
+
+kos:
+  - id: dockerhub
+    repositories:
+      - 7cjqdceqvl3fbbj2/headscale
+
+    # bare tells KO to only use the repository
+    # for tagging and naming the container.
+    bare: true
+    base_image: gcr.io/distroless/base-debian13
+    build: headscale
+    main: ./cmd/headscale
+    env:
+      - CGO_ENABLED=0
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    tags:
+      - "{{ if not .Prerelease }}latest{{ end }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}.{{ .Patch }}{{ end }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"
+      - "{{ if not .Prerelease }}{{ .Major }}{{ end }}"
+      - "{{ if not .Prerelease }}v{{ .Major }}.{{ .Minor }}.{{ .Patch }}{{ end }}"
+      - "{{ if not .Prerelease }}v{{ .Major }}.{{ .Minor }}{{ end }}"
+      - "{{ if not .Prerelease }}v{{ .Major }}{{ end }}"
+      - "{{ if not .Prerelease }}stable{{ else }}unstable{{ end }}"
+      - "{{ .Tag }}"
+      - '{{ trimprefix .Tag "v" }}'
+      - "sha-{{ .ShortCommit }}"
+    creation_time: "{{.CommitTimestamp}}"
+    ko_data_creation_time: "{{.CommitTimestamp}}"
+
+  - id: dockerhub-debug
+    repositories:
+      - 7cjqdceqvl3fbbj2/headscale
+
+    bare: true
+    base_image: gcr.io/distroless/base-debian13:debug
+    build: headscale
+    main: ./cmd/headscale
+    env:
+      - CGO_ENABLED=0
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    tags:
+      - "{{ if not .Prerelease }}latest-debug{{ end }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}.{{ .Patch }}-debug{{ end }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}-debug{{ end }}"
+      - "{{ if not .Prerelease }}{{ .Major }}-debug{{ end }}"
+      - "{{ if not .Prerelease }}v{{ .Major }}.{{ .Minor }}.{{ .Patch }}-debug{{ end }}"
+      - "{{ if not .Prerelease }}v{{ .Major }}.{{ .Minor }}-debug{{ end }}"
+      - "{{ if not .Prerelease }}v{{ .Major }}-debug{{ end }}"
+      - "{{ if not .Prerelease }}stable-debug{{ else }}unstable-debug{{ end }}"
+      - "{{ .Tag }}-debug"
+      - '{{ trimprefix .Tag "v" }}-debug'
+      - "sha-{{ .ShortCommit }}-debug"
+
+checksum:
+  name_template: "checksums.txt"
+snapshot:
+  version_template: "{{ .Tag }}-next"
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
